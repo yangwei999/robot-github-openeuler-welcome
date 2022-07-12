@@ -1,4 +1,4 @@
-module github.com/opensourceways/robot-github-cla
+module github.com/opensourceways/robot-github-openeuler-welcome
 
 go 1.16
 
