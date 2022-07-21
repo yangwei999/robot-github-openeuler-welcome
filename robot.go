@@ -169,7 +169,7 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 		return "", "", fmt.Errorf("cant get sig name of repo: %s/%s", org, repo)
 	}
 
-	maintainers, committers, err := bot.getMaintainers(org, repo, sigName)
+	maintainers, committers, err := bot.getMaintainers(org, repo, sigName, cfg)
 	if err != nil {
 		return "", "", err
 	}
@@ -187,7 +187,7 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 	), nil
 }
 
-func (bot *robot) getMaintainers(org, repo, sigName string) ([]string, []string, error) {
+func (bot *robot) getMaintainers(org, repo, sigName string, config *botConfig) ([]string, []string, error) {
 	v, err := bot.cli.ListCollaborator(gc.PRInfo{Org: org, Repo: repo})
 	if err != nil {
 		return nil, nil, err
@@ -206,18 +206,17 @@ func (bot *robot) getMaintainers(org, repo, sigName string) ([]string, []string,
 	}
 
 	// check OWNERS file
-	_, err = bot.cli.GetPathContent("wanghao75", "community",
+	_, err = bot.cli.GetPathContent(config.CommunityName, config.CommunityRepo,
 		fmt.Sprintf("sig/%s/OWNERS", sigName), "master")
 	if err != nil {
 		// OWNERS not exist, load sig-info.yaml
-		f, err := bot.cli.GetPathContent("wanghao75", "community",
+		f, err := bot.cli.GetPathContent(config.CommunityName, config.CommunityRepo,
 			fmt.Sprintf("sig/%s/sig-info.yaml", sigName), "master")
 		if err != nil {
 			return r, nil, err
 		}
 
 		maintainers, committers := decodeSigInfoFile(*f.Content)
-		fmt.Println(maintainers, committers)
 		return maintainers.UnsortedList(), committers.UnsortedList(), nil
 	}
 
