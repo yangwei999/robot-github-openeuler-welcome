@@ -101,16 +101,13 @@ func (bot *robot) handleIssueEvent(e *sdk.IssuesEvent, pc config.Config, log *lo
 	}
 
 	org, repo := strings.Split(e.Repo.GetFullName(), "/")[0], e.GetRepo().GetName()
-	fmt.Println(org, repo)
 	cfg, err := bot.getConfig(pc, org, repo)
 	if err != nil {
-		fmt.Println(err)
 		return err
 	}
 
 	author := e.GetIssue().GetUser().GetLogin()
 	number := e.GetIssue().GetNumber()
-	fmt.Println(org, repo, author, number)
 	is := gc.PRInfo{
 		Org:    org,
 		Repo:   repo,
