@@ -1,7 +1,14 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"net/http"
+	"regexp"
+	"sigs.k8s.io/yaml"
 	"strings"
 
 	sdk "github.com/google/go-github/v36/github"
@@ -35,6 +42,7 @@ type iClient interface {
 	GetRepoLabels(org, repo string) ([]string, error)
 	CreateRepoLabel(org, repo, label string) error
 	GetDirectoryTree(org, repo, branch string, recursive bool) ([]*sdk.TreeEntry, error)
+	GetPullRequestChanges(pr gc.PRInfo) ([]*sdk.CommitFile, error)
 }
 
 func newRobot(cli iClient) *robot {
@@ -92,6 +100,7 @@ func (bot *robot) handlePREvent(e *sdk.PullRequestEvent, pc config.Config, log *
 		func(label string) error {
 			return bot.cli.AddPRLabel(pr, label)
 		},
+		number,
 	)
 }
 
@@ -124,6 +133,7 @@ func (bot *robot) handleIssueEvent(e *sdk.IssuesEvent, pc config.Config, log *lo
 		func(label string) error {
 			return bot.cli.AddIssueLabel(is, []string{label})
 		},
+		0,
 	)
 }
 
@@ -131,13 +141,38 @@ func (bot *robot) handle(
 	org, repo, author string,
 	cfg *botConfig, log *logrus.Entry,
 	addMsg, addLabel func(string) error,
+	number int,
 ) error {
-	sigName, comment, err := bot.genComment(org, repo, author, cfg)
+	sigName, comment, err := bot.genComment(org, repo, author, number, cfg, log)
 	if err != nil {
 		return err
 	}
 
 	mErr := utils.NewMultiErrors()
+
+	if number > 0 {
+		resp, err := http.Get(fmt.Sprintf("https://ipb.osinfra.cn/pulls?author=%s", author))
+		if err != nil {
+			mErr.AddError(err)
+		}
+		defer resp.Body.Close()
+		body, _ := ioutil.ReadAll(resp.Body)
+		type T struct {
+			Total int `json:"total,omitempty"`
+		}
+
+		var t T
+		err = json.Unmarshal(body, &t)
+		if err != nil {
+			mErr.AddError(err)
+		}
+
+		if t.Total == 0 {
+			if err = bot.cli.AddPRLabel(gc.PRInfo{Org: org, Repo: repo, Number: number}, "newcomer"); err != nil {
+				mErr.AddError(err)
+			}
+		}
+	}
 
 	if err := addMsg(comment); err != nil {
 		mErr.AddError(err)
@@ -156,7 +191,7 @@ func (bot *robot) handle(
 	return mErr.Err()
 }
 
-func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, string, error) {
+func (bot robot) genComment(org, repo, author string, number int, cfg *botConfig, log *logrus.Entry) (string, string, error) {
 	sigName, err := bot.getSigOfRepo(org, repo, cfg)
 	if err != nil {
 		return "", "", err
@@ -166,7 +201,7 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 		return "", "", fmt.Errorf("cant get sig name of repo: %s/%s", org, repo)
 	}
 
-	maintainers, committers, err := bot.getMaintainers(org, repo, sigName, cfg)
+	maintainers, committers, err := bot.getMaintainers(org, repo, sigName, number, cfg, log)
 	if err != nil {
 		return "", "", err
 	}
@@ -184,7 +219,14 @@ func (bot robot) genComment(org, repo, author string, cfg *botConfig) (string, s
 	), nil
 }
 
-func (bot *robot) getMaintainers(org, repo, sigName string, config *botConfig) ([]string, []string, error) {
+func (bot *robot) getMaintainers(org, repo, sigName string, number int, config *botConfig, log *logrus.Entry) ([]string, []string, error) {
+	if config.WelcomeSimpler {
+		membersToContact, err := bot.findSpecialContact(org, repo, number, config, log)
+		if err == nil && len(membersToContact) != 0 {
+			return membersToContact.UnsortedList(), nil, nil
+		}
+	}
+
 	v, err := bot.cli.ListCollaborator(gc.PRInfo{Org: org, Repo: repo})
 	if err != nil {
 		return nil, nil, err
@@ -233,4 +275,63 @@ func (bot *robot) createLabelIfNeed(org, repo, label string) error {
 	}
 
 	return bot.cli.CreateRepoLabel(org, repo, label)
+}
+
+func (bot *robot) findSpecialContact(org, repo string, number int, cfg *botConfig, log *logrus.Entry) (sets.String, error) {
+	if number == 0 {
+		return nil, nil
+	}
+
+	changes, err := bot.cli.GetPullRequestChanges(gc.PRInfo{Org: org, Repo: repo, Number: number})
+	if err != nil {
+		log.Errorf("get pr changes failed: %v", err)
+		return nil, err
+	}
+
+	filePath := cfg.FilePath
+	branch := cfg.FileBranch
+
+	content, err := bot.cli.GetPathContent(org, repo, filePath, branch)
+	if err != nil {
+		log.Errorf("get file %s/%s/%s failed, err: %v", org, repo, filePath, err)
+		return nil, err
+	}
+
+	c, err := base64.StdEncoding.DecodeString(*content.Content)
+	if err != nil {
+		log.Errorf("decode string err: %v", err)
+		return nil, err
+	}
+
+	var r Relation
+
+	err = yaml.Unmarshal(c, &r)
+	if err != nil {
+		log.Errorf("yaml unmarshal failed: %v", err)
+		return nil, err
+	}
+
+	owners := sets.NewString()
+	var mo []Maintainer
+	for _, c := range changes {
+		for _, f := range r.Relations {
+			for _, ff := range f.Path {
+				if strings.Contains(*c.Filename, ff) {
+					mo = append(mo, f.Owner...)
+				}
+				if strings.Contains(ff, "/*/") {
+					reg := regexp.MustCompile(strings.Replace(ff, "/*/", "/[^\\s]+/", -1))
+					if ok := reg.MatchString(*c.Filename); ok {
+						mo = append(mo, f.Owner...)
+					}
+				}
+			}
+		}
+	}
+
+	for _, m := range mo {
+		owners.Insert(m.GiteeID)
+	}
+
+	return owners, nil
 }
