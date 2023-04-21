@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/opensourceways/community-robot-lib/config"
+	"github.com/opensourceways/server-common-lib/config"
 )
 
 type configuration struct {
