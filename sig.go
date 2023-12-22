@@ -14,18 +14,20 @@ func (bot *robot) getSigOfRepo(org, repo string, cfg *botConfig) (string, error)
 }
 
 func (bot *robot) listAllFilesOfRepo(cfg *botConfig) (map[string]string, error) {
-	trees, err := bot.cli.GetDirectoryTree(cfg.CommunityName, cfg.CommunityRepo, cfg.Branch, true)
-	if err != nil || len(trees) == 0 {
+	trees, err := bot.gic.GetDirectoryTree(cfg.CommunityName, cfg.CommunityRepo, cfg.Branch, 1)
+
+	tree := trees.Tree
+	if err != nil || len(tree) == 0 {
 		return nil, err
 	}
 
 	r := make(map[string]string)
 	count := 4
 
-	for i := range trees {
-		item := trees[i]
-		if strings.Count(item.GetPath(), "/") == count {
-			r[item.GetPath()] = strings.Split(item.GetPath(), "/")[1]
+	for i := range tree {
+		item := tree[i]
+		if strings.Count(item.Path, "/") == count {
+			r[item.Path] = strings.Split(item.Path, "/")[1]
 		}
 	}
 

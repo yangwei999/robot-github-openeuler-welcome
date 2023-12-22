@@ -16,6 +16,7 @@ import (
 	gc "github.com/opensourceways/community-robot-lib/githubclient"
 	framework "github.com/opensourceways/community-robot-lib/robot-github-framework"
 	"github.com/opensourceways/community-robot-lib/utils"
+	sg "github.com/opensourceways/go-gitee/gitee"
 	"github.com/sirupsen/logrus"
 )
 
@@ -29,6 +30,11 @@ If you have any questions, please contact the SIG: [%s](https://gitee.com/openeu
 Hi ***%s***, welcome to the %s Community.
 I'm the Bot here serving you. You can find the instructions on how to interact with me at **[Here](%s)**.
 If you have any questions, please contact the SIG: [%s](https://gitee.com/openeuler/community/tree/master/sig/%s), and any of the maintainers: @%s or the committers: @%s`
+	welcomeMessage3 = `
+Hi ***%s***, welcome to the %s Community.
+I'm the Bot here serving you. You can find the instructions on how to interact with me at **[Here](%s)**.
+If you have any questions, please contact the SIG: [%s](https://gitee.com/openeuler/community/tree/master/sig/%s), and any of the maintainers.
+`
 )
 
 type iClient interface {
@@ -45,12 +51,20 @@ type iClient interface {
 	GetPullRequestChanges(pr gc.PRInfo) ([]*sdk.CommitFile, error)
 }
 
-func newRobot(cli iClient) *robot {
-	return &robot{cli: cli}
+type iGiteeClient interface {
+	GetDirectoryTree(org, repo, sha string, recursive int32) (sg.Tree, error)
+}
+
+func newRobot(cli iClient, gic iGiteeClient) *robot {
+	return &robot{
+		cli: cli,
+		gic: gic,
+	}
 }
 
 type robot struct {
 	cli iClient
+	gic iGiteeClient
 }
 
 func (bot *robot) NewConfig() config.Config {
@@ -206,6 +220,12 @@ func (bot robot) genComment(org, repo, author string, number int, cfg *botConfig
 		return "", "", err
 	}
 
+	if maintainers == nil && committers == nil {
+		return sigName, fmt.Sprintf(
+				welcomeMessage3, author, cfg.CommunityName, cfg.CommandLink, sigName, sigName),
+			nil
+	}
+
 	if len(committers) != 0 {
 		return sigName, fmt.Sprintf(
 			welcomeMessage2, author, cfg.CommunityName, cfg.CommandLink,
@@ -242,21 +262,6 @@ func (bot *robot) getMaintainers(org, repo, sigName string, number int, config *
 				}
 			}
 		}
-	}
-
-	// check OWNERS file
-	_, err = bot.cli.GetPathContent(config.CommunityName, config.CommunityRepo,
-		fmt.Sprintf("sig/%s/OWNERS", sigName), "master")
-	if err != nil {
-		// OWNERS not exist, load sig-info.yaml
-		f, err := bot.cli.GetPathContent(config.CommunityName, config.CommunityRepo,
-			fmt.Sprintf("sig/%s/sig-info.yaml", sigName), "master")
-		if err != nil {
-			return r, nil, err
-		}
-
-		maintainers, committers := decodeSigInfoFile(*f.Content)
-		return maintainers.UnsortedList(), committers.UnsortedList(), nil
 	}
 
 	return r, nil, nil
