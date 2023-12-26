@@ -257,8 +257,9 @@ func (bot *robot) getMaintainers(org, repo, sigName string, number int, config *
 		p := v[i].Permissions
 		if p != nil {
 			for j := range p {
-				if (j == "push" || j == "maintain") && p[j] {
+				if (j == "maintain" || j == "push") && p[j] {
 					r = append(r, v[i].GetLogin())
+					break
 				}
 			}
 		}
